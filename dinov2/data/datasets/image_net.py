@@ -71,6 +71,7 @@ class ImageNet(ExtendedVisionDataset):
         self._split = split
 
         entries_path = self._get_entries_path(split, root)
+        self.dump_extra(split="ImageNet.Split", root="/work/dlclarge2/ferreira-dinov2/dinov2", labels_root="/work/dlclarge2/ferreira-dinov2/dinov2")
         self._entries = self._load_extra(entries_path)
 
         self._class_ids = None
@@ -160,12 +161,13 @@ class ImageNet(ExtendedVisionDataset):
 
         return labels
 
-    def _dump_entries(self, split: "ImageNet.Split", root: Optional[str] = None) -> None:
+    def _dump_entries(self, split: "ImageNet.Split", root: Optional[str] = None, labels_root = None) -> None:
         # NOTE: Using torchvision ImageFolder for consistency
         from torchvision.datasets import ImageFolder
 
         root = self.root
-        labels = self._load_labels(root)
+        # labels = self._load_labels(root)
+        labels = self._load_labels(labels_root)
 
         if split == ImageNet.Split.TEST:
             dataset = None
@@ -246,6 +248,6 @@ class ImageNet(ExtendedVisionDataset):
         class_names_path = self._get_class_names_path(split, root)
         self._save_extra(class_names_array, class_names_path)
 
-    def dump_extra(self, split: "ImageNet.Split", root: Optional[str] = None) -> None:
-        self._dump_entries(split, root)
+    def dump_extra(self, split: "ImageNet.Split", root: Optional[str] = None, labels_root = None) -> None:
+        self._dump_entries(split, root, labels_root=labels_root)
         self._dump_class_ids_and_names(split, root)

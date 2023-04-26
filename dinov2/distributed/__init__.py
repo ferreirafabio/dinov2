@@ -158,6 +158,9 @@ class _TorchDistributedEnvironment:
         self.local_rank = -1
         self.local_world_size = -1
 
+        if torch.cuda.device_count() > 0:
+            return self._set_from_local()
+
         if _is_slurm_job_process():
             return self._set_from_slurm_env()
 
@@ -173,13 +176,13 @@ class _TorchDistributedEnvironment:
             collected_env_vars = ", ".join(env_vars.keys())
             raise RuntimeError(f"Partially set environment: {collected_env_vars}")
 
-        if torch.cuda.device_count() > 0:
-            return self._set_from_local()
+
 
         raise RuntimeError("Can't initialize PyTorch distributed environment")
 
     # Slurm job created with sbatch, submitit, etc...
     def _set_from_slurm_env(self):
+        # if 'SLURM_PROCID' in os.environ:
         # logger.info("Initialization from Slurm environment")
         job_id = int(os.environ["SLURM_JOB_ID"])
         node_count = int(os.environ["SLURM_JOB_NUM_NODES"])
@@ -194,6 +197,20 @@ class _TorchDistributedEnvironment:
         self.local_rank = int(os.environ["SLURM_LOCALID"])
         self.local_world_size = self.world_size // node_count
         assert self.local_rank < self.local_world_size
+        # else:
+        #     # launched naively with `python train.py`
+        #     os.environ['MASTER_ADDR'] = '127.0.0.1'
+        #     os.environ['MASTER_PORT'] = '29500'
+        #     self.master_addr = os.environ['MASTER_ADDR']
+        #     self.master_port = os.environ['MASTER_PORT']
+        #     self.rank = 0
+        #     self.world_size = 1
+        #
+        #     node_count = 1
+        #     self.local_rank = self.rank % torch.cuda.device_count()
+        #     self.local_world_size = self.world_size // node_count
+        #     assert self.local_rank < self.local_world_size
+
 
     # Single node job with preset environment (i.e. torchrun)
     def _set_from_preset_env(self):
