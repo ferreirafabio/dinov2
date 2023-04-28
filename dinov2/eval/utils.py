@@ -67,7 +67,7 @@ def evaluate(
     for samples, targets, *_ in metric_logger.log_every(data_loader, 10, header):
         outputs = model(samples.to(device))
         targets = targets.to(device)
-
+        
         if criterion is not None:
             loss = criterion(outputs, targets)
             metric_logger.update(loss=loss.item())

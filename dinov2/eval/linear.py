@@ -136,12 +136,12 @@ def get_args_parser(
         train_dataset_str="ImageNet:split=TRAIN",
         val_dataset_str="ImageNet:split=VAL",
         test_dataset_strs=None,
-        epochs=10,
+        epochs=2, # TODO: change back to 10
         batch_size=128,
         num_workers=8,
-        epoch_length=1250,
+        epoch_length=10, # TODO: set back to 1250
         save_checkpoint_frequency=20,
-        eval_period_iterations=1250,
+        eval_period_iterations=20, # TODO: set back to 1250
         learning_rates=[1e-5, 2e-5, 5e-5, 1e-4, 2e-4, 5e-4, 1e-3, 2e-3, 5e-3, 1e-2, 2e-2, 5e-2, 0.1],
         val_metric_type=MetricType.MEAN_ACCURACY,
         test_metric_types=None,
@@ -266,9 +266,12 @@ def evaluate_linear_classifiers(
     metrics_file_path,
     training_num_classes,
     iteration,
+    eval_results,
+    running_checkpoint_period,
     prefixstring="",
     class_mapping=None,
     best_classifier_on_val=None,
+    mode="val",
 ):
     logger.info("running validation !")
 
@@ -284,9 +287,8 @@ def evaluate_linear_classifiers(
         metrics,
         torch.cuda.current_device(),
     )
-
-    logger.info("")
     results_dict = {}
+    logger.info("")
     max_accuracy = 0
     best_classifier = ""
     for i, (classifier_string, metric) in enumerate(results_dict_temp.items()):
@@ -308,7 +310,21 @@ def evaluate_linear_classifiers(
                 f.write(json.dumps({k: v}) + "\n")
             f.write("\n")
 
-    return results_dict
+    all_classifiers = {
+        classifier_k: {"top1": classifier_v["top-1"].item(), "top5": classifier_v["top-5"].item()}
+        for classifier_k, classifier_v in results_dict_temp.items()
+    }
+
+    eval_results.append({
+        "iteration": iteration,
+        "epoch": iteration // running_checkpoint_period,
+        f"{mode}_accuracy_best": max_accuracy,
+        f"{mode}_accuracy_best_classifier": best_classifier,
+        f"{mode}_accuracy_all_classifiers": all_classifiers,
+
+    })
+
+    return results_dict, eval_results
 
 
 def eval_linear(
@@ -339,6 +355,9 @@ def eval_linear(
     logger.info("Starting training from iteration {}".format(start_iter))
     metric_logger = MetricLogger(delimiter="  ")
     header = "Training"
+    train_results, val_results = [], []
+    train_results_path = os.path.join(output_dir, "train_results.json")
+    val_results_path = os.path.join(output_dir, "val_results.json")
 
     for data, labels in metric_logger.log_every(
         train_data_loader,
@@ -371,6 +390,21 @@ def eval_linear(
             metric_logger.update(lr=optimizer.param_groups[0]["lr"])
             print("lr", optimizer.param_groups[0]["lr"])
 
+            losses_all = {k: v.item() for k, v in losses.items()}
+            min_loss_key = min(losses_all, key=lambda k: losses[k])
+            min_loss = losses_all[min_loss_key]
+            train_results.append({
+                "iteration": iteration,
+                "epoch": iteration // running_checkpoint_period,
+                "train_loss_best": min_loss,
+                "train_loss_best_classifier": min_loss_key,
+                "train_loss_sum": loss.item(),
+                "train_losses_all": losses_all,
+                "lr": optimizer.param_groups[0]["lr"], # same across classifiers?
+            })
+            with open(train_results_path, 'w') as f:
+                json.dump(train_results, f, indent=2)
+
         if iteration - start_iter > 5:
             if iteration % running_checkpoint_period == 0:
                 torch.cuda.synchronize()
@@ -381,7 +415,7 @@ def eval_linear(
         periodic_checkpointer.step(iteration)
 
         if eval_period > 0 and (iteration + 1) % eval_period == 0 and iteration != max_iter - 1:
-            _ = evaluate_linear_classifiers(
+            _, val_results = evaluate_linear_classifiers(
                 feature_model=feature_model,
                 linear_classifiers=remove_ddp_wrapper(linear_classifiers),
                 data_loader=val_data_loader,
@@ -391,12 +425,18 @@ def eval_linear(
                 training_num_classes=training_num_classes,
                 iteration=iteration,
                 class_mapping=val_class_mapping,
+                eval_results=val_results,
+                running_checkpoint_period=running_checkpoint_period,
             )
+
+            with open(val_results_path, 'w') as f:
+                json.dump(val_results, f, indent=2)
+
             torch.cuda.synchronize()
 
         iteration = iteration + 1
 
-    val_results_dict = evaluate_linear_classifiers(
+    val_results_dict, val_results = evaluate_linear_classifiers(
         feature_model=feature_model,
         linear_classifiers=remove_ddp_wrapper(linear_classifiers),
         data_loader=val_data_loader,
@@ -405,12 +445,17 @@ def eval_linear(
         training_num_classes=training_num_classes,
         iteration=iteration,
         class_mapping=val_class_mapping,
+        eval_results=val_results,
+        running_checkpoint_period=running_checkpoint_period,
     )
+
+    with open(val_results_path, 'w') as f:
+        json.dump(val_results, f, indent=2)
+
     return val_results_dict, feature_model, linear_classifiers, iteration
 
 
 def make_eval_data_loader(test_dataset_str, batch_size, num_workers, metric_type, train_dataset=None):
-    # TODO: replace train_transform
     idxs = train_dataset.idxs if train_dataset else None
 
     test_dataset = make_dataset(
@@ -443,15 +488,19 @@ def test_on_datasets(
     training_num_classes,
     iteration,
     best_classifier_on_val,
+    test_results,
+    running_checkpoint_period,
     prefixstring="",
     test_class_mappings=[None],
     train_dataset=None,
 ):
     results_dict = {}
+
     for test_dataset_str, class_mapping, metric_type in zip(test_dataset_strs, test_class_mappings, test_metric_types):
         logger.info(f"Testing on {test_dataset_str}")
+
         test_data_loader = make_eval_data_loader(test_dataset_str, batch_size, num_workers, metric_type, train_dataset)
-        dataset_results_dict = evaluate_linear_classifiers(
+        dataset_results_dict, test_results = evaluate_linear_classifiers(
             feature_model,
             remove_ddp_wrapper(linear_classifiers),
             test_data_loader,
@@ -459,12 +508,15 @@ def test_on_datasets(
             metrics_file_path,
             training_num_classes,
             iteration,
+            eval_results=test_results,
+            running_checkpoint_period=running_checkpoint_period,
             prefixstring="",
             class_mapping=class_mapping,
             best_classifier_on_val=best_classifier_on_val,
+            mode="test"
         )
         results_dict[f"{test_dataset_str}_accuracy"] = 100.0 * dataset_results_dict["best_classifier"]["accuracy"]
-    return results_dict
+    return results_dict, test_results
 
 
 def run_eval_linear(
@@ -498,7 +550,6 @@ def run_eval_linear(
         assert len(test_metric_types) == len(test_dataset_strs)
     assert len(test_dataset_strs) == len(test_class_mapping_fpaths)
 
-    # TODO: replace train_transform
     train_transform = make_classification_train_transform()
     train_dataset = make_dataset(
         dataset_str=train_dataset_str,
@@ -579,8 +630,11 @@ def run_eval_linear(
         classifier_fpath=classifier_fpath,
     )
     results_dict = {}
+    test_results = []
+    test_results_path = os.path.join(output_dir, "test_results.json")
+
     if len(test_dataset_strs) > 1 or test_dataset_strs[0] != val_dataset_str:
-        results_dict = test_on_datasets(
+        results_dict, test_results = test_on_datasets(
             feature_model,
             linear_classifiers,
             test_dataset_strs,
@@ -591,11 +645,18 @@ def run_eval_linear(
             training_num_classes,
             iteration,
             val_results_dict["best_classifier"]["name"],
+            test_results=test_results,
+            running_checkpoint_period=epoch_length,
             prefixstring="",
             test_class_mappings=test_class_mappings,
-            train_dataset=train_dataset,
+            train_dataset=train_dataset,  # that this is train is not a bug, needed for indices for splits
         )
+
+    with open(test_results_path, 'w') as f:
+        json.dump(test_results, f, indent=2)
+
     results_dict["best_classifier"] = val_results_dict["best_classifier"]["name"]
+
     results_dict[f"{val_dataset_str}_accuracy"] = 100.0 * val_results_dict["best_classifier"]["accuracy"]
     logger.info("Test Results Dict " + str(results_dict))
 
