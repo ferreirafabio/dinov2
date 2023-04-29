@@ -18,6 +18,7 @@ AVAILABLE_MTLBM_DATASETS = {"set0": ["BCT", "BRD", "CRS", "FLW", "MD_MIX", "PLK"
                             "set2": ["ACT_410", "AWA", "BTS", "FNG", "INS", "MD_6", "PLT_DOC", "PRT", "RSD",
                                      "TEX_ALOT"]}
 AVAILABLE_SETS = ["set0", "set1", "set2"]
+VERSIONS = ["micro", "mini", "extended"]
 DEFAULT_FOLDER = "/work/dlclarge1/pineda-autofinetune_metadata/datasets"
 
 
