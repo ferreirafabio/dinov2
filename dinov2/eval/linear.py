@@ -11,6 +11,7 @@ import logging
 import os
 import sys
 from typing import List, Optional
+import time
 
 import numpy as np
 import torch
@@ -143,6 +144,8 @@ def get_args_parser(
         save_checkpoint_frequency=20,
         eval_period_iterations=125,
         learning_rates=[1e-5, 2e-5, 5e-5, 1e-4, 2e-4, 5e-4, 1e-3, 2e-3, 5e-3, 1e-2, 2e-2, 5e-2, 0.1],
+        #learning_rates=[5e-5, 1e-4, 2e-4, 5e-4, 1e-3, 2e-3, 5e-3, 1e-2],
+        #learning_rates=[1e-4, 2e-4, 5e-4, 1e-3, 2e-3, 5e-3],
         val_metric_type=MetricType.MEAN_ACCURACY,
         test_metric_types=None,
         classifier_fpath=None,
@@ -359,6 +362,7 @@ def eval_linear(
     train_results_path = os.path.join(output_dir, "train_results.json")
     val_results_path = os.path.join(output_dir, "val_results.json")
 
+    train_times_list = []
     for data, labels in metric_logger.log_every(
         train_data_loader,
         10,
@@ -366,6 +370,8 @@ def eval_linear(
         max_iter,
         start_iter,
     ):
+        start_time = time.time()
+
         data = data.cuda(non_blocking=True)
         labels = labels.cuda(non_blocking=True)
 
@@ -383,12 +389,16 @@ def eval_linear(
         optimizer.step()
         scheduler.step()
 
+        end_time = time.time()
+        train_times_list.append(end_time - start_time)
+
         # log
         if iteration % 10 == 0:
             torch.cuda.synchronize()
             metric_logger.update(loss=loss.item())
             metric_logger.update(lr=optimizer.param_groups[0]["lr"])
             print("lr", optimizer.param_groups[0]["lr"])
+
 
             losses_all = {k: v.item() for k, v in losses.items()}
             min_loss_key = min(losses_all, key=lambda k: losses[k])
@@ -400,7 +410,8 @@ def eval_linear(
                 "train_loss_best_classifier": min_loss_key,
                 "train_loss_sum": loss.item(),
                 "train_losses_all": losses_all,
-                "lr": optimizer.param_groups[0]["lr"], # same across classifiers?
+                "lr": optimizer.param_groups[0]["lr"],  # same across classifiers?
+                "current_time_for_train": sum(train_times_list),
             })
             with open(train_results_path, 'w') as f:
                 json.dump(train_results, f, indent=2)
@@ -560,6 +571,7 @@ def run_eval_linear(
     # sampler_type = SamplerType.INFINITE
 
     n_last_blocks_list = [1, 4]
+    #n_last_blocks_list = [1, 2]
     n_last_blocks = max(n_last_blocks_list)
     autocast_ctx = partial(torch.cuda.amp.autocast, enabled=True, dtype=autocast_dtype)
     feature_model = ModelWithIntermediateLayers(model, n_last_blocks, autocast_ctx)
@@ -634,6 +646,7 @@ def run_eval_linear(
     test_results_path = os.path.join(output_dir, "test_results.json")
 
     if len(test_dataset_strs) > 1 or test_dataset_strs[0] != val_dataset_str:
+        start = time.time()
         results_dict, test_results = test_on_datasets(
             feature_model,
             linear_classifiers,
@@ -651,6 +664,10 @@ def run_eval_linear(
             test_class_mappings=test_class_mappings,
             train_dataset=train_dataset,  # that this is train is not a bug, needed for indices for splits
         )
+        end = time.time()
+        test_results.append({
+                "total_time_for_test": end-start
+        })
 
     with open(test_results_path, 'w') as f:
         json.dump(test_results, f, indent=2)

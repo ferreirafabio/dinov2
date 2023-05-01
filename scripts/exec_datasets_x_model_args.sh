@@ -6,7 +6,7 @@
 #SBATCH -e experiments/metaalbum/vitl14/logs/%A-%a.%x.e
 #SBATCH --gres=gpu:1
 #SBATCH -t 20:00:00
-#SBATCH --array 1-88%1
+#SBATCH --array 1-55%20
 
 #source /home/ferreira/.miniconda/bin/activate dinov2
 #export PYTHONPATH="${PYTHONPATH}:${HOME}/AutoFinetune"

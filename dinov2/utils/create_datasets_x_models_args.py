@@ -7,6 +7,41 @@ import argparse
 
 from dinov2.data.datasets.meta_album import MetaAlbum, AVAILABLE_MTLBM_DATASETS, AVAILABLE_SETS, VERSIONS
 SPLITS = ["TRAIN", "VAL", "TEST"]
+DATASETS_CAUSING_MEM_ISSUE= [
+    "extended_set2_TEX_ALOT",
+    "extended_set2_RSD",
+    "extended_set2_PRT",
+    "extended_set2_FNG",
+    "extended_set2_BTS",
+    "extended_set2_AWA",
+    "extended_set1_TEX_DTD",
+    "extended_set1_RSICB",
+    "extended_set1_PNU",
+    "extended_set1_PLT_NET",
+    "extended_set1_MED_LF",
+    "extended_set1_INS_2",
+    "extended_set1_DOG",
+    "extended_set1_APL",
+    "extended_set0_TEX",
+    "extended_set0_SPT",
+    "extended_set0_RESISC",
+    "extended_set0_PLT_VIL",
+    "extended_set0_PLK",
+    "extended_set0_FLW",
+    "extended_set0_CRS",
+    "extended_set0_BRD",
+    "extended_set0_BCT",
+    "mini_set2_TEX_ALOT",
+    "mini_set2_MD_6",
+    "mini_set2_INS",
+    "mini_set1_MD_5_BIS",
+    "mini_set1_INS_2",
+    "mini_set1_DOG",
+    "mini_set0_MD_MIX",
+    "mini_set0_FLW",
+    "mini_set0_CRS",
+    "mini_set0_BRD",
+]
 
 def generate_single_command(
         pretrained_weights_path,
@@ -33,7 +68,6 @@ def generate_commands(
         pretrained_weights_path,
         config_file_path,
         experiment_output_dir_path,
-        out_command_file_path,
 ):
 
     commands = []
@@ -42,6 +76,9 @@ def generate_commands(
 
             # OCR datasets in extended version are missing
             if version == "extended" and dataset in ["MD_MIX", "MD_5_BIS", "MD_6"]:
+                continue
+
+            if f"{version}_{set}_{dataset}" in DATASETS_CAUSING_MEM_ISSUE:
                 continue
 
             command = generate_single_command(
@@ -55,10 +92,7 @@ def generate_commands(
             )
             commands.append(command)
 
-    # print(experiment_dir_names)
-    print(f"Total number of commands generated: {len(commands)}")
-    out_command_file_path.write_text("\n")
-    out_command_file_path.write_text("\n".join(commands))
+    return commands
 
 
 if __name__ == '__main__':
@@ -100,7 +134,7 @@ if __name__ == '__main__':
 
     parser.add_argument(
         "--experiment_output_dir_path",
-        default="experiments/metaalbum/vitl14",
+        default="experiments/metaalbum/vitl14_timestamp",
         type=Path,
         help="Specifies where the args file should be stored"
     )
@@ -117,10 +151,14 @@ if __name__ == '__main__':
     args = parser.parse_args()
     command_file_path = Path(args.command_file_path) / args.args_command_file_name
 
-    generate_commands(
+    commands = generate_commands(
         dataset_dir_path=args.dataset_dir_path,
         pretrained_weights_path=args.pretrained_weights_path,
         config_file_path=args.config_file_path,
         experiment_output_dir_path=args.experiment_output_dir_path,
-        out_command_file_path=command_file_path
     )
+
+    # print(experiment_dir_names)
+    print(f"Total number of commands generated: {len(commands)}")
+    command_file_path.write_text("\n")
+    command_file_path.write_text("\n".join(commands))
