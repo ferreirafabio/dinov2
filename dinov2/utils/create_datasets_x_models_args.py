@@ -50,7 +50,8 @@ def generate_single_command(
         dataset_dir_path,
         version,
         set,
-        dataset
+        dataset,
+        filter_active,
 ):
     command = f"--pretrained-weights {pretrained_weights_path} " \
               f"--config-file {config_file_path} " \
@@ -60,6 +61,12 @@ def generate_single_command(
 
     for split in SPLITS:
         command += f" --{split.lower()}-dataset {meta_dataset_name}:split={split}:root={dataset_dir_path}/{version}/{set}/{dataset}"
+
+    if filter_active:
+        command += f" --reduce-n-last-blocks"
+        # command += f" --batch-size 16"
+        # command += f" --epoch-length 10000"
+        command += f" --num-workers 0"
 
     return command
 
@@ -71,7 +78,10 @@ def generate_commands(
 ):
 
     commands = []
+    filtered_commands = []
+    filter_active = False
     for i, (version, set) in enumerate(it.product(VERSIONS, AVAILABLE_SETS)):
+
         for dataset in AVAILABLE_MTLBM_DATASETS[set]:
 
             # OCR datasets in extended version are missing
@@ -79,7 +89,7 @@ def generate_commands(
                 continue
 
             if f"{version}_{set}_{dataset}" in DATASETS_CAUSING_MEM_ISSUE:
-                continue
+                filter_active = True
 
             command = generate_single_command(
                 pretrained_weights_path=pretrained_weights_path,
@@ -89,10 +99,16 @@ def generate_commands(
                 version=version,
                 set=set,
                 dataset=dataset,
+                filter_active=filter_active,
             )
-            commands.append(command)
 
-    return commands
+            if filter_active:
+                filtered_commands.append(command)
+            else:
+                commands.append(command)
+            filter_active = False
+
+    return commands, filtered_commands
 
 
 if __name__ == '__main__':
@@ -134,10 +150,11 @@ if __name__ == '__main__':
 
     parser.add_argument(
         "--experiment_output_dir_path",
-        default="experiments/metaalbum/vitl14_timestamp",
+        default="experiments/metaalbum/vitl14_timestamp_mem_issues",
         type=Path,
         help="Specifies where the args file should be stored"
     )
+
 
     # example:
     # python linear.py
@@ -150,8 +167,10 @@ if __name__ == '__main__':
     #/work/dlclarge2/ferreira-dinov2/dinov2/dinov2/configs/eval/dinov2_vitl14_pretrain.pth
     args = parser.parse_args()
     command_file_path = Path(args.command_file_path) / args.args_command_file_name
+    filtered_command_file_path = Path(args.command_file_path) / "vitl14_linear_meta_album_filtered.args"
 
-    commands = generate_commands(
+
+    commands, filtered_commands = generate_commands(
         dataset_dir_path=args.dataset_dir_path,
         pretrained_weights_path=args.pretrained_weights_path,
         config_file_path=args.config_file_path,
@@ -159,6 +178,9 @@ if __name__ == '__main__':
     )
 
     # print(experiment_dir_names)
-    print(f"Total number of commands generated: {len(commands)}")
-    command_file_path.write_text("\n")
-    command_file_path.write_text("\n".join(commands))
+    print(f"Total number of commands generated: {len(commands) + len(filtered_commands)}")
+    #command_file_path.write_text("\n")
+    #command_file_path.write_text("\n".join(commands))
+
+    filtered_command_file_path.write_text("\n")
+    filtered_command_file_path.write_text("\n".join(filtered_commands))

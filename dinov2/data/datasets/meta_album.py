@@ -98,6 +98,10 @@ class MetaAlbum(Dataset):
         # Get raw labels
         self.read_info_json()
         df = self.read_labels_csv()
+        if "extended/set2/INS" in self.dataset_directory:
+            len_before = len(df)
+            df = df[~df.index.duplicated(keep='first')]
+            print(f"dropped {len_before-len(df)} duplicates in dataframe")
 
         search_pattern = os.path.join(self.dataset_directory, "images", "*.*")
         items = list()

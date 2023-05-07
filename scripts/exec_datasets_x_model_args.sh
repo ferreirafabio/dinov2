@@ -2,8 +2,8 @@
 
 #SBATCH -p bosch_gpu-rtx2080
 #SBATCH --job-name dinov2_meta_album_vitl14
-#SBATCH -o experiments/metaalbum/vitl14/logs/%A-%a.%x.o
-#SBATCH -e experiments/metaalbum/vitl14/logs/%A-%a.%x.e
+#SBATCH -o experiments/metaalbum/vitl14_timestamp/logs/%A-%a.%x.o
+#SBATCH -e experiments/metaalbum/vitl14_timestamp/logs/%A-%a.%x.e
 #SBATCH --gres=gpu:1
 #SBATCH -t 20:00:00
 #SBATCH --array 1-55%20

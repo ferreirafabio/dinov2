@@ -133,6 +133,13 @@ def get_args_parser(
         type=str,
         help="Path to a file containing a mapping to adjust classifier outputs",
     )
+
+    parser.add_argument(
+        "--reduce-n-last-blocks",
+        action="store_true",
+        help="Whether to not resume from existing checkpoints",
+    )
+
     parser.set_defaults(
         train_dataset_str="ImageNet:split=TRAIN",
         val_dataset_str="ImageNet:split=VAL",
@@ -144,7 +151,7 @@ def get_args_parser(
         save_checkpoint_frequency=20,
         eval_period_iterations=125,
         learning_rates=[1e-5, 2e-5, 5e-5, 1e-4, 2e-4, 5e-4, 1e-3, 2e-3, 5e-3, 1e-2, 2e-2, 5e-2, 0.1],
-        #learning_rates=[5e-5, 1e-4, 2e-4, 5e-4, 1e-3, 2e-3, 5e-3, 1e-2],
+        # learning_rates=[5e-5, 1e-4, 2e-4, 5e-4, 1e-3, 2e-3, 5e-3, 1e-2],
         #learning_rates=[1e-4, 2e-4, 5e-4, 1e-3, 2e-3, 5e-3],
         val_metric_type=MetricType.MEAN_ACCURACY,
         test_metric_types=None,
@@ -543,6 +550,7 @@ def run_eval_linear(
     eval_period_iterations,
     learning_rates,
     autocast_dtype,
+    reduce_n_last_blocks=False,
     test_dataset_strs=None,
     resume=True,
     classifier_fpath=None,
@@ -570,8 +578,11 @@ def run_eval_linear(
     sampler_type = SamplerType.SHARDED_INFINITE
     # sampler_type = SamplerType.INFINITE
 
-    n_last_blocks_list = [1, 4]
-    #n_last_blocks_list = [1, 2]
+    if reduce_n_last_blocks:
+        n_last_blocks_list = [1]
+    else:
+        n_last_blocks_list = [1, 4]
+
     n_last_blocks = max(n_last_blocks_list)
     autocast_ctx = partial(torch.cuda.amp.autocast, enabled=True, dtype=autocast_dtype)
     feature_model = ModelWithIntermediateLayers(model, n_last_blocks, autocast_ctx)
@@ -599,7 +610,7 @@ def run_eval_linear(
         sampler_type=sampler_type,
         sampler_advance=start_iter,
         drop_last=True,
-        persistent_workers=True,
+        persistent_workers=False, # TODO: change to True
     )
 
     val_data_loader = make_eval_data_loader(val_dataset_str, batch_size, num_workers, val_metric_type, train_dataset)
@@ -702,6 +713,7 @@ def main(args):
         test_metric_types=args.test_metric_types,
         val_class_mapping_fpath=args.val_class_mapping_fpath,
         test_class_mapping_fpaths=args.test_class_mapping_fpaths,
+        reduce_n_last_blocks=args.reduce_n_last_blocks,
     )
     return 0
 
