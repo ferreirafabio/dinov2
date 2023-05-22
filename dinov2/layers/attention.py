@@ -12,6 +12,7 @@ import logging
 
 from torch import Tensor
 from torch import nn
+import loralib as lora
 
 
 logger = logging.getLogger("dinov2")
@@ -41,9 +42,11 @@ class Attention(nn.Module):
         head_dim = dim // num_heads
         self.scale = head_dim**-0.5
 
-        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        #self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        self.qkv = lora.Linear(dim, dim * 3, bias=qkv_bias, r=16, lora_alpha=16)
         self.attn_drop = nn.Dropout(attn_drop)
-        self.proj = nn.Linear(dim, dim, bias=proj_bias)
+        #self.proj = nn.Linear(dim, dim, bias=proj_bias)
+        self.proj = lora.Linear(dim, dim, bias=proj_bias, r=16, lora_alpha=16)
         self.proj_drop = nn.Dropout(proj_drop)
 
     def forward(self, x: Tensor) -> Tensor:

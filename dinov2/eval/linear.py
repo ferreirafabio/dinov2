@@ -13,6 +13,10 @@ import sys
 from typing import List, Optional
 import time
 
+# peft
+from peft import get_peft_config, get_peft_model, LoraConfig, TaskType
+import loralib as lora
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -25,7 +29,7 @@ import dinov2.distributed as distributed
 from dinov2.eval.metrics import MetricType, build_metric
 from dinov2.eval.setup import get_args_parser as get_setup_args_parser
 from dinov2.eval.setup import setup_and_build_model
-from dinov2.eval.utils import ModelWithIntermediateLayers, evaluate
+from dinov2.eval.utils import ModelWithIntermediateLayers, evaluate, print_trainable_parameters, get_trainable_parameters
 from dinov2.logging import MetricLogger
 
 
@@ -133,11 +137,20 @@ def get_args_parser(
         type=str,
         help="Path to a file containing a mapping to adjust classifier outputs",
     )
-
     parser.add_argument(
         "--reduce-n-last-blocks",
         action="store_true",
         help="Whether to not resume from existing checkpoints",
+    )
+    parser.add_argument(
+        "--lora",
+        action="store_true",
+        help="Whether to optimize with lora",
+    )
+    parser.add_argument(
+        "--finetune-all",
+        action="store_true",
+        help="Whether to optimize all backbone params",
     )
 
     parser.set_defaults(
@@ -149,7 +162,7 @@ def get_args_parser(
         num_workers=8,
         epoch_length=1250,
         save_checkpoint_frequency=20,
-        eval_period_iterations=125,
+        eval_period_iterations=1250,
         learning_rates=[1e-5, 2e-5, 5e-5, 1e-4, 2e-4, 5e-4, 1e-3, 2e-3, 5e-3, 1e-2, 2e-2, 5e-2, 0.1],
         # learning_rates=[5e-5, 1e-4, 2e-4, 5e-4, 1e-3, 2e-3, 5e-3, 1e-2],
         #learning_rates=[1e-4, 2e-4, 5e-4, 1e-3, 2e-3, 5e-3],
@@ -159,7 +172,6 @@ def get_args_parser(
         val_class_mapping_fpath=None,
         test_class_mapping_fpaths=[None],
     )
-
     return parser
 
 
@@ -356,6 +368,8 @@ def eval_linear(
     resume=True,
     classifier_fpath=None,
     val_class_mapping=None,
+    lora_optimizer=None,
+    lora_scheduler=None,
 ):
     checkpointer = Checkpointer(linear_classifiers, output_dir, optimizer=optimizer, scheduler=scheduler)
     start_iter = checkpointer.resume_or_load(classifier_fpath or "", resume=resume).get("iteration", -1) + 1
@@ -392,6 +406,11 @@ def eval_linear(
         optimizer.zero_grad()
         loss.backward()
 
+        # lora
+        if lora_optimizer:
+            lora_optimizer.step()
+            lora_scheduler.step()
+
         # step
         optimizer.step()
         scheduler.step()
@@ -404,7 +423,9 @@ def eval_linear(
             torch.cuda.synchronize()
             metric_logger.update(loss=loss.item())
             metric_logger.update(lr=optimizer.param_groups[0]["lr"])
-            print("lr", optimizer.param_groups[0]["lr"])
+            #print("0_initial_lr", optimizer.param_groups[0]["initial_lr"])
+            if lora_optimizer:
+                print("lora_lr", lora_optimizer.param_groups[0]["lr"])
 
 
             losses_all = {k: v.item() for k, v in losses.items()}
@@ -474,7 +495,9 @@ def eval_linear(
 
 
 def make_eval_data_loader(test_dataset_str, batch_size, num_workers, metric_type, train_dataset=None):
-    idxs = train_dataset.idxs if train_dataset else None
+    idxs = None
+    if "MetaAlbum" in test_dataset_str:
+        idxs = train_dataset.idxs if train_dataset else None
 
     test_dataset = make_dataset(
         dataset_str=test_dataset_str,
@@ -558,6 +581,7 @@ def run_eval_linear(
     test_class_mapping_fpaths=[None],
     val_metric_type=MetricType.MEAN_ACCURACY,
     test_metric_types=None,
+    args=None
 ):
     seed = 0
 
@@ -586,6 +610,18 @@ def run_eval_linear(
     n_last_blocks = max(n_last_blocks_list)
     autocast_ctx = partial(torch.cuda.amp.autocast, enabled=True, dtype=autocast_dtype)
     feature_model = ModelWithIntermediateLayers(model, n_last_blocks, autocast_ctx)
+
+    for param in feature_model.parameters():
+        param.requires_grad = False
+
+    if args.lora:
+        # mark_only_lora_as_trainable assumes all are True
+        for param in feature_model.parameters():
+            param.requires_grad = True
+
+        lora.mark_only_lora_as_trainable(model)
+        lora_params = get_trainable_parameters(model)
+
     sample_output = feature_model(train_dataset[0][0].unsqueeze(0).cuda())
 
     linear_classifiers, optim_param_groups = setup_linear_classifiers(
@@ -596,8 +632,28 @@ def run_eval_linear(
         training_num_classes,
     )
 
-    optimizer = torch.optim.SGD(optim_param_groups, momentum=0.9, weight_decay=0)
+    all_param_base_model = sum(p.numel() for p in model.parameters())
+    trainable_base_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    if args.lora:
+        logger.info(f"LoRA-specific parameters count: {trainable_base_params}")
+
+    for k, v in linear_classifiers.module.classifiers_dict.items():
+        all_params = all_param_base_model + sum(p.numel() for p in v.parameters())
+        all_trainable_params = trainable_base_params + sum(p.numel() for p in v.parameters() if p.requires_grad)
+        print_trainable_parameters(v, logger, all_params=all_params, trainable_params=all_trainable_params, key=k)
+
     max_iter = epochs * epoch_length
+
+    lora_optimizer, lora_scheduler = None, None
+    if args.lora:
+        lora_optimizer = torch.optim.AdamW(lora_params, lr=0.001)
+        lora_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=lora_optimizer, T_max=max_iter)
+
+    if args.finetune_all:
+        optim_param_groups += [{"lr": 0.0001, "params": model.parameters()}]
+
+    optimizer = torch.optim.SGD(optim_param_groups, momentum=0.9, weight_decay=0)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, max_iter, eta_min=0)
     checkpointer = Checkpointer(linear_classifiers, output_dir, optimizer=optimizer, scheduler=scheduler)
     start_iter = checkpointer.resume_or_load(classifier_fpath or "", resume=resume).get("iteration", -1) + 1
@@ -610,7 +666,7 @@ def run_eval_linear(
         sampler_type=sampler_type,
         sampler_advance=start_iter,
         drop_last=True,
-        persistent_workers=False, # TODO: change to True
+        persistent_workers=True,  # TODO: change back to False if issues
     )
 
     val_data_loader = make_eval_data_loader(val_dataset_str, batch_size, num_workers, val_metric_type, train_dataset)
@@ -651,6 +707,8 @@ def run_eval_linear(
         resume=resume,
         val_class_mapping=val_class_mapping,
         classifier_fpath=classifier_fpath,
+        lora_optimizer=lora_optimizer,
+        lora_scheduler=lora_scheduler,
     )
     results_dict = {}
     test_results = []
@@ -714,6 +772,7 @@ def main(args):
         val_class_mapping_fpath=args.val_class_mapping_fpath,
         test_class_mapping_fpaths=args.test_class_mapping_fpaths,
         reduce_n_last_blocks=args.reduce_n_last_blocks,
+        args=args,
     )
     return 0
 

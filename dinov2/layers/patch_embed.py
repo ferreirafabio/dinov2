@@ -12,7 +12,7 @@ from typing import Callable, Optional, Tuple, Union
 
 from torch import Tensor
 import torch.nn as nn
-
+import loralib as lora
 
 def make_2tuple(x):
     if isinstance(x, tuple):
@@ -64,6 +64,7 @@ class PatchEmbed(nn.Module):
         self.flatten_embedding = flatten_embedding
 
         self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_HW, stride=patch_HW)
+        #self.proj = lora.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_HW, r=16, lora_alpha=16)
         self.norm = norm_layer(embed_dim) if norm_layer else nn.Identity()
 
     def forward(self, x: Tensor) -> Tensor:
