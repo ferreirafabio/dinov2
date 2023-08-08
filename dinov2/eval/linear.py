@@ -478,7 +478,6 @@ def eval_linear(
                 json.dump(val_results, f, indent=2)
 
             feature_model.train()
-
             torch.cuda.synchronize()
 
         iteration = iteration + 1
@@ -665,6 +664,7 @@ def run_eval_linear(
     if args.finetune_all:
         optim_param_groups += [{"lr": 0.0001, "params": model.parameters()}]
         print("-----------------------------finetune_all is on")
+
 
     optimizer = torch.optim.SGD(optim_param_groups, momentum=0.9, weight_decay=0)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, max_iter, eta_min=0)
