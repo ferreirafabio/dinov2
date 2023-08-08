@@ -179,7 +179,7 @@ if __name__ == '__main__':
     #/work/dlclarge2/ferreira-dinov2/dinov2/dinov2/configs/eval/dinov2_vitl14_pretrain.pth
     args = parser.parse_args()
     command_file_path = Path(args.command_file_path) / args.args_command_file_name
-    filtered_command_file_path = Path(args.command_file_path) / "vitl14_linear_meta_album_filtered.args"
+    filtered_command_file_path = Path(args.command_file_path) / "vitl14_linear_meta_album_lora_filtered.args"
 
     commands, filtered_commands = generate_commands(
         dataset_dir_path=args.dataset_dir_path,
@@ -191,8 +191,8 @@ if __name__ == '__main__':
 
     # print(experiment_dir_names)
     print(f"Total number of commands generated: {len(commands) + len(filtered_commands)}")
-    #command_file_path.write_text("\n")
-    #command_file_path.write_text("\n".join(commands))
+    command_file_path.write_text("\n")
+    command_file_path.write_text("\n".join(commands))
 
     filtered_command_file_path.write_text("\n")
     filtered_command_file_path.write_text("\n".join(filtered_commands))
