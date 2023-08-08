@@ -67,7 +67,7 @@ def evaluate(
     for samples, targets, *_ in metric_logger.log_every(data_loader, 10, header):
         outputs = model(samples.to(device))
         targets = targets.to(device)
-
+        
         if criterion is not None:
             loss = criterion(outputs, targets)
             metric_logger.update(loss=loss.item())
@@ -145,3 +145,26 @@ def extract_features_with_dataloader(model, data_loader, sample_count, gather_on
     assert torch.all(all_labels > -1)
 
     return features, all_labels
+
+def print_trainable_parameters(model, logger, all_params=None, trainable_params=None, key=None):
+    """
+    Prints the number of trainable parameters in the model.
+    """
+    if all_params and trainable_params and key:
+        logger.info(
+            f"trainable params: {trainable_params} || all params: {all_params} || trainable%: {100 * trainable_params / all_params:.2f} ({key})"
+        )
+    else:
+        trainable_param = 0
+        all_param = 0
+        for _, param in model.named_parameters():
+            all_param += param.numel()
+            if param.requires_grad:
+                trainable_param += param.numel()
+
+        logger.info(
+            f"trainable params: {trainable_param} || all params: {all_param} || trainable%: {100 * trainable_param / all_param:.2f}"
+        )
+
+def get_trainable_parameters(model):
+    return filter(lambda p: p.requires_grad, model.parameters())

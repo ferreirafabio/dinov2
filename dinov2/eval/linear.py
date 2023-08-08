@@ -11,6 +11,11 @@ import logging
 import os
 import sys
 from typing import List, Optional
+import time
+
+# peft
+from peft import get_peft_config, get_peft_model, LoraConfig, TaskType
+import loralib as lora
 
 import numpy as np
 import torch
@@ -24,7 +29,7 @@ import dinov2.distributed as distributed
 from dinov2.eval.metrics import MetricType, build_metric
 from dinov2.eval.setup import get_args_parser as get_setup_args_parser
 from dinov2.eval.setup import setup_and_build_model
-from dinov2.eval.utils import ModelWithIntermediateLayers, evaluate
+from dinov2.eval.utils import ModelWithIntermediateLayers, evaluate, print_trainable_parameters, get_trainable_parameters
 from dinov2.logging import MetricLogger
 
 
@@ -132,6 +137,22 @@ def get_args_parser(
         type=str,
         help="Path to a file containing a mapping to adjust classifier outputs",
     )
+    parser.add_argument(
+        "--reduce-n-last-blocks",
+        action="store_true",
+        help="Whether to not resume from existing checkpoints",
+    )
+    parser.add_argument(
+        "--lora",
+        action="store_true",
+        help="Whether to optimize with lora",
+    )
+    parser.add_argument(
+        "--finetune-all",
+        action="store_true",
+        help="Whether to optimize all backbone params",
+    )
+
     parser.set_defaults(
         train_dataset_str="ImageNet:split=TRAIN",
         val_dataset_str="ImageNet:split=VAL",
@@ -143,6 +164,8 @@ def get_args_parser(
         save_checkpoint_frequency=20,
         eval_period_iterations=1250,
         learning_rates=[1e-5, 2e-5, 5e-5, 1e-4, 2e-4, 5e-4, 1e-3, 2e-3, 5e-3, 1e-2, 2e-2, 5e-2, 0.1],
+        # learning_rates=[5e-5, 1e-4, 2e-4, 5e-4, 1e-3, 2e-3, 5e-3, 1e-2],
+        #learning_rates=[1e-4, 2e-4, 5e-4, 1e-3, 2e-3, 5e-3],
         val_metric_type=MetricType.MEAN_ACCURACY,
         test_metric_types=None,
         classifier_fpath=None,
@@ -265,9 +288,12 @@ def evaluate_linear_classifiers(
     metrics_file_path,
     training_num_classes,
     iteration,
+    eval_results,
+    running_checkpoint_period,
     prefixstring="",
     class_mapping=None,
     best_classifier_on_val=None,
+    mode="val",
 ):
     logger.info("running validation !")
 
@@ -283,9 +309,8 @@ def evaluate_linear_classifiers(
         metrics,
         torch.cuda.current_device(),
     )
-
-    logger.info("")
     results_dict = {}
+    logger.info("")
     max_accuracy = 0
     best_classifier = ""
     for i, (classifier_string, metric) in enumerate(results_dict_temp.items()):
@@ -307,7 +332,21 @@ def evaluate_linear_classifiers(
                 f.write(json.dumps({k: v}) + "\n")
             f.write("\n")
 
-    return results_dict
+    all_classifiers = {
+        classifier_k: {"top1": classifier_v["top-1"].item(), "top5": classifier_v["top-5"].item()}
+        for classifier_k, classifier_v in results_dict_temp.items()
+    }
+
+    eval_results.append({
+        "iteration": iteration,
+        "epoch": iteration // running_checkpoint_period,
+        f"{mode}_accuracy_best": max_accuracy,
+        f"{mode}_accuracy_best_classifier": best_classifier,
+        f"{mode}_accuracy_all_classifiers": all_classifiers,
+
+    })
+
+    return results_dict, eval_results
 
 
 def eval_linear(
@@ -329,6 +368,8 @@ def eval_linear(
     resume=True,
     classifier_fpath=None,
     val_class_mapping=None,
+    lora_optimizer=None,
+    lora_scheduler=None,
 ):
     checkpointer = Checkpointer(linear_classifiers, output_dir, optimizer=optimizer, scheduler=scheduler)
     start_iter = checkpointer.resume_or_load(classifier_fpath or "", resume=resume).get("iteration", -1) + 1
@@ -338,7 +379,15 @@ def eval_linear(
     logger.info("Starting training from iteration {}".format(start_iter))
     metric_logger = MetricLogger(delimiter="  ")
     header = "Training"
+    train_results, val_results = [], []
+    train_results_path = os.path.join(output_dir, "train_results.json")
+    val_results_path = os.path.join(output_dir, "val_results.json")
 
+    # added due to LoRA use case
+    feature_model.train()
+    #feature_model.feature_model.train()
+
+    train_times_list = []
     for data, labels in metric_logger.log_every(
         train_data_loader,
         10,
@@ -346,6 +395,8 @@ def eval_linear(
         max_iter,
         start_iter,
     ):
+        start_time = time.time()
+
         data = data.cuda(non_blocking=True)
         labels = labels.cuda(non_blocking=True)
 
@@ -357,18 +408,47 @@ def eval_linear(
 
         # compute the gradients
         optimizer.zero_grad()
+        if lora_optimizer:
+            lora_optimizer.zero_grad()
         loss.backward()
+
+        # lora
+        if lora_optimizer:
+            lora_optimizer.step()
+            lora_scheduler.step()
 
         # step
         optimizer.step()
         scheduler.step()
+
+        end_time = time.time()
+        train_times_list.append(end_time - start_time)
 
         # log
         if iteration % 10 == 0:
             torch.cuda.synchronize()
             metric_logger.update(loss=loss.item())
             metric_logger.update(lr=optimizer.param_groups[0]["lr"])
-            print("lr", optimizer.param_groups[0]["lr"])
+            #print("0_initial_lr", optimizer.param_groups[0]["initial_lr"])
+            if lora_optimizer:
+                print("lora_lr", lora_optimizer.param_groups[0]["lr"])
+
+
+            losses_all = {k: v.item() for k, v in losses.items()}
+            min_loss_key = min(losses_all, key=lambda k: losses[k])
+            min_loss = losses_all[min_loss_key]
+            train_results.append({
+                "iteration": iteration,
+                "epoch": iteration // running_checkpoint_period,
+                "train_loss_best": min_loss,
+                "train_loss_best_classifier": min_loss_key,
+                "train_loss_sum": loss.item(),
+                "train_losses_all": losses_all,
+                "lr": optimizer.param_groups[0]["lr"],
+                "current_time_for_train": sum(train_times_list),
+            })
+            with open(train_results_path, 'w') as f:
+                json.dump(train_results, f, indent=2)
 
         if iteration - start_iter > 5:
             if iteration % running_checkpoint_period == 0:
@@ -380,7 +460,7 @@ def eval_linear(
         periodic_checkpointer.step(iteration)
 
         if eval_period > 0 and (iteration + 1) % eval_period == 0 and iteration != max_iter - 1:
-            _ = evaluate_linear_classifiers(
+            _, val_results = evaluate_linear_classifiers(
                 feature_model=feature_model,
                 linear_classifiers=remove_ddp_wrapper(linear_classifiers),
                 data_loader=val_data_loader,
@@ -390,12 +470,20 @@ def eval_linear(
                 training_num_classes=training_num_classes,
                 iteration=iteration,
                 class_mapping=val_class_mapping,
+                eval_results=val_results,
+                running_checkpoint_period=running_checkpoint_period,
             )
+
+            with open(val_results_path, 'w') as f:
+                json.dump(val_results, f, indent=2)
+
+            feature_model.train()
+
             torch.cuda.synchronize()
 
         iteration = iteration + 1
 
-    val_results_dict = evaluate_linear_classifiers(
+    val_results_dict, val_results = evaluate_linear_classifiers(
         feature_model=feature_model,
         linear_classifiers=remove_ddp_wrapper(linear_classifiers),
         data_loader=val_data_loader,
@@ -404,15 +492,27 @@ def eval_linear(
         training_num_classes=training_num_classes,
         iteration=iteration,
         class_mapping=val_class_mapping,
+        eval_results=val_results,
+        running_checkpoint_period=running_checkpoint_period,
     )
+
+    with open(val_results_path, 'w') as f:
+        json.dump(val_results, f, indent=2)
+
     return val_results_dict, feature_model, linear_classifiers, iteration
 
 
-def make_eval_data_loader(test_dataset_str, batch_size, num_workers, metric_type):
+def make_eval_data_loader(test_dataset_str, batch_size, num_workers, metric_type, train_dataset=None):
+    idxs = None
+    if "MetaAlbum" in test_dataset_str:
+        idxs = train_dataset.idxs if train_dataset else None
+
     test_dataset = make_dataset(
         dataset_str=test_dataset_str,
         transform=make_classification_eval_transform(),
+        idxs=idxs,
     )
+
     test_data_loader = make_data_loader(
         dataset=test_dataset,
         batch_size=batch_size,
@@ -437,14 +537,19 @@ def test_on_datasets(
     training_num_classes,
     iteration,
     best_classifier_on_val,
+    test_results,
+    running_checkpoint_period,
     prefixstring="",
     test_class_mappings=[None],
+    train_dataset=None,
 ):
     results_dict = {}
+
     for test_dataset_str, class_mapping, metric_type in zip(test_dataset_strs, test_class_mappings, test_metric_types):
         logger.info(f"Testing on {test_dataset_str}")
-        test_data_loader = make_eval_data_loader(test_dataset_str, batch_size, num_workers, metric_type)
-        dataset_results_dict = evaluate_linear_classifiers(
+
+        test_data_loader = make_eval_data_loader(test_dataset_str, batch_size, num_workers, metric_type, train_dataset)
+        dataset_results_dict, test_results = evaluate_linear_classifiers(
             feature_model,
             remove_ddp_wrapper(linear_classifiers),
             test_data_loader,
@@ -452,12 +557,15 @@ def test_on_datasets(
             metrics_file_path,
             training_num_classes,
             iteration,
+            eval_results=test_results,
+            running_checkpoint_period=running_checkpoint_period,
             prefixstring="",
             class_mapping=class_mapping,
             best_classifier_on_val=best_classifier_on_val,
+            mode="test"
         )
         results_dict[f"{test_dataset_str}_accuracy"] = 100.0 * dataset_results_dict["best_classifier"]["accuracy"]
-    return results_dict
+    return results_dict, test_results
 
 
 def run_eval_linear(
@@ -473,6 +581,7 @@ def run_eval_linear(
     eval_period_iterations,
     learning_rates,
     autocast_dtype,
+    reduce_n_last_blocks=False,
     test_dataset_strs=None,
     resume=True,
     classifier_fpath=None,
@@ -480,6 +589,7 @@ def run_eval_linear(
     test_class_mapping_fpaths=[None],
     val_metric_type=MetricType.MEAN_ACCURACY,
     test_metric_types=None,
+    args=None
 ):
     seed = 0
 
@@ -500,10 +610,30 @@ def run_eval_linear(
     sampler_type = SamplerType.SHARDED_INFINITE
     # sampler_type = SamplerType.INFINITE
 
-    n_last_blocks_list = [1, 4]
+    if reduce_n_last_blocks:
+        n_last_blocks_list = [1]
+    else:
+        n_last_blocks_list = [1, 4]
+
     n_last_blocks = max(n_last_blocks_list)
     autocast_ctx = partial(torch.cuda.amp.autocast, enabled=True, dtype=autocast_dtype)
     feature_model = ModelWithIntermediateLayers(model, n_last_blocks, autocast_ctx)
+
+    if args.finetune_all:
+        for param in feature_model.parameters():
+            param.requires_grad = True
+    else:
+        for param in feature_model.parameters():
+            param.requires_grad = False
+
+    if args.lora:
+        # mark_only_lora_as_trainable assumes all are True
+        for param in feature_model.parameters():
+            param.requires_grad = True
+
+        lora.mark_only_lora_as_trainable(model)
+        lora_params = get_trainable_parameters(model)
+
     sample_output = feature_model(train_dataset[0][0].unsqueeze(0).cuda())
 
     linear_classifiers, optim_param_groups = setup_linear_classifiers(
@@ -514,8 +644,29 @@ def run_eval_linear(
         training_num_classes,
     )
 
-    optimizer = torch.optim.SGD(optim_param_groups, momentum=0.9, weight_decay=0)
+    all_param_base_model = sum(p.numel() for p in model.parameters())
+    trainable_base_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    if args.lora:
+        logger.info(f"LoRA-specific parameters count: {trainable_base_params}")
+
+    for k, v in linear_classifiers.module.classifiers_dict.items():
+        all_params = all_param_base_model + sum(p.numel() for p in v.parameters())
+        all_trainable_params = trainable_base_params + sum(p.numel() for p in v.parameters() if p.requires_grad)
+        print_trainable_parameters(v, logger, all_params=all_params, trainable_params=all_trainable_params, key=k)
+
     max_iter = epochs * epoch_length
+
+    lora_optimizer, lora_scheduler = None, None
+    if args.lora:
+        lora_optimizer = torch.optim.AdamW(lora_params, lr=0.001)
+        lora_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=lora_optimizer, T_max=max_iter)
+
+    if args.finetune_all:
+        optim_param_groups += [{"lr": 0.0001, "params": model.parameters()}]
+        print("-----------------------------finetune_all is on")
+
+    optimizer = torch.optim.SGD(optim_param_groups, momentum=0.9, weight_decay=0)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, max_iter, eta_min=0)
     checkpointer = Checkpointer(linear_classifiers, output_dir, optimizer=optimizer, scheduler=scheduler)
     start_iter = checkpointer.resume_or_load(classifier_fpath or "", resume=resume).get("iteration", -1) + 1
@@ -528,9 +679,10 @@ def run_eval_linear(
         sampler_type=sampler_type,
         sampler_advance=start_iter,
         drop_last=True,
-        persistent_workers=True,
+        persistent_workers=True,  # TODO: change back to False if issues
     )
-    val_data_loader = make_eval_data_loader(val_dataset_str, batch_size, num_workers, val_metric_type)
+
+    val_data_loader = make_eval_data_loader(val_dataset_str, batch_size, num_workers, val_metric_type, train_dataset)
 
     checkpoint_period = save_checkpoint_frequency * epoch_length
 
@@ -568,10 +720,16 @@ def run_eval_linear(
         resume=resume,
         val_class_mapping=val_class_mapping,
         classifier_fpath=classifier_fpath,
+        lora_optimizer=lora_optimizer,
+        lora_scheduler=lora_scheduler,
     )
     results_dict = {}
+    test_results = []
+    test_results_path = os.path.join(output_dir, "test_results.json")
+
     if len(test_dataset_strs) > 1 or test_dataset_strs[0] != val_dataset_str:
-        results_dict = test_on_datasets(
+        start = time.time()
+        results_dict, test_results = test_on_datasets(
             feature_model,
             linear_classifiers,
             test_dataset_strs,
@@ -582,10 +740,22 @@ def run_eval_linear(
             training_num_classes,
             iteration,
             val_results_dict["best_classifier"]["name"],
+            test_results=test_results,
+            running_checkpoint_period=epoch_length,
             prefixstring="",
             test_class_mappings=test_class_mappings,
+            train_dataset=train_dataset,  # that this is train is not a bug, needed for indices for splits
         )
+        end = time.time()
+        test_results.append({
+                "total_time_for_test": end-start
+        })
+
+    with open(test_results_path, 'w') as f:
+        json.dump(test_results, f, indent=2)
+
     results_dict["best_classifier"] = val_results_dict["best_classifier"]["name"]
+
     results_dict[f"{val_dataset_str}_accuracy"] = 100.0 * val_results_dict["best_classifier"]["accuracy"]
     logger.info("Test Results Dict " + str(results_dict))
 
@@ -614,6 +784,8 @@ def main(args):
         test_metric_types=args.test_metric_types,
         val_class_mapping_fpath=args.val_class_mapping_fpath,
         test_class_mapping_fpaths=args.test_class_mapping_fpaths,
+        reduce_n_last_blocks=args.reduce_n_last_blocks,
+        args=args,
     )
     return 0
 

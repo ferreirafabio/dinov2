@@ -9,9 +9,10 @@ from enum import Enum
 from typing import Any, Callable, List, Optional, TypeVar
 
 import torch
+import numpy as np
 from torch.utils.data import Sampler
 
-from .datasets import ImageNet, ImageNet22k
+from .datasets import ImageNet, ImageNet22k, MetaAlbum
 from .samplers import EpochSampler, InfiniteSampler, ShardedInfiniteSampler
 
 
@@ -59,6 +60,8 @@ def _parse_dataset_str(dataset_str: str):
             kwargs["split"] = ImageNet.Split[kwargs["split"]]
     elif name == "ImageNet22k":
         class_ = ImageNet22k
+    elif name == "MetaAlbum":
+        class_ = MetaAlbum
     else:
         raise ValueError(f'Unsupported dataset "{name}"')
 
@@ -70,6 +73,7 @@ def make_dataset(
     dataset_str: str,
     transform: Optional[Callable] = None,
     target_transform: Optional[Callable] = None,
+    idxs: np.array = None,
 ):
     """
     Creates a dataset with the specified parameters.
@@ -85,6 +89,8 @@ def make_dataset(
     logger.info(f'using dataset: "{dataset_str}"')
 
     class_, kwargs = _parse_dataset_str(dataset_str)
+    if "MetaAlbum" in dataset_str:
+        kwargs["idxs"] = idxs
     dataset = class_(transform=transform, target_transform=target_transform, **kwargs)
 
     logger.info(f"# of dataset samples: {len(dataset):,d}")

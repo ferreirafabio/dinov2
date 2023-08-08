@@ -94,25 +94,33 @@ def submit_jobs(task_class, args, name: str):
         args.output_dir = str(get_shared_folder() / "%j")
 
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
-    executor = submitit.AutoExecutor(folder=args.output_dir, slurm_max_num_timeout=30)
+    # executor = submitit.AutoExecutor(folder=args.output_dir, slurm_max_num_timeout=30)
+
+    executor = submitit.get_executor(
+        folder=args.output_dir,
+        slurm_partition="testdlc_gpu-rtx2080",
+        slurm_gres='gpu:8',
+        name=name,
+    )
 
     kwargs = {}
-    if args.use_volta32:
-        kwargs["slurm_constraint"] = "volta32gb"
-    if args.comment:
-        kwargs["slurm_comment"] = args.comment
-    if args.exclude:
-        kwargs["slurm_exclude"] = args.exclude
+    # if args.use_volta32:
+    #     kwargs["slurm_constraint"] = "volta32gb"
+    # if args.comment:
+    #     kwargs["slurm_comment"] = args.comment
+    # if args.exclude:
+    #     kwargs["slurm_exclude"] = args.exclude
 
     executor_params = get_slurm_executor_parameters(
         nodes=args.nodes,
         num_gpus_per_node=args.ngpus,
-        timeout_min=args.timeout,  # max is 60 * 72
-        slurm_signal_delay_s=120,
-        slurm_partition=args.partition,
+        #timeout_min=args.timeout,  # max is 60 * 72
+        #slurm_signal_delay_s=120,
+        #slurm_partition=args.partition,
         **kwargs,
     )
-    executor.update_parameters(name=name, **executor_params)
+    print(executor_params)
+    #executor.update_parameters(name=name, **executor_params)
 
     task = task_class(args)
     job = executor.submit(task)
