@@ -52,6 +52,7 @@ def generate_single_command(
         set,
         dataset,
         filter_active,
+        use_lora,
 ):
     command = f"--pretrained-weights {pretrained_weights_path} " \
               f"--config-file {config_file_path} " \
@@ -68,6 +69,9 @@ def generate_single_command(
         # command += f" --epoch-length 10000"
         command += f" --num-workers 0"
 
+    if use_lora:
+        command += f" --lora"
+
     return command
 
 def generate_commands(
@@ -75,6 +79,7 @@ def generate_commands(
         pretrained_weights_path,
         config_file_path,
         experiment_output_dir_path,
+        use_lora,
 ):
 
     commands = []
@@ -100,6 +105,7 @@ def generate_commands(
                 set=set,
                 dataset=dataset,
                 filter_active=filter_active,
+                use_lora=use_lora,
             )
 
             if filter_active:
@@ -155,6 +161,12 @@ if __name__ == '__main__':
         help="Specifies where the args file should be stored"
     )
 
+    parser.add_argument(
+        "--lora",
+        action="store_true",
+        help="Whether to use lora",
+    )
+
 
     # example:
     # python linear.py
@@ -175,6 +187,7 @@ if __name__ == '__main__':
         pretrained_weights_path=args.pretrained_weights_path,
         config_file_path=args.config_file_path,
         experiment_output_dir_path=args.experiment_output_dir_path,
+        use_lora=args.lora,
     )
 
     # print(experiment_dir_names)
