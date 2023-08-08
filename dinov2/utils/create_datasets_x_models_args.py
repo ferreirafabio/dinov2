@@ -136,7 +136,7 @@ if __name__ == '__main__':
 
     parser.add_argument(
         "--args_command_file_name",
-        default="vitl14_linear_meta_album.args",
+        default="vitl14_linear_meta_album_lora.args",
         help="Specifies the name of the args file to be output"
     )
 
@@ -156,7 +156,7 @@ if __name__ == '__main__':
 
     parser.add_argument(
         "--experiment_output_dir_path",
-        default="experiments/metaalbum/vitl14_timestamp_mem_issues",
+        default="experiments/metaalbum/vitl14_lora",
         type=Path,
         help="Specifies where the args file should be stored"
     )
@@ -180,7 +180,6 @@ if __name__ == '__main__':
     args = parser.parse_args()
     command_file_path = Path(args.command_file_path) / args.args_command_file_name
     filtered_command_file_path = Path(args.command_file_path) / "vitl14_linear_meta_album_filtered.args"
-
 
     commands, filtered_commands = generate_commands(
         dataset_dir_path=args.dataset_dir_path,
