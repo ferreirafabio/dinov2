@@ -660,6 +660,7 @@ def run_eval_linear(
     if args.lora:
         lora_optimizer = torch.optim.AdamW(lora_params, lr=0.001)
         lora_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=lora_optimizer, T_max=max_iter)
+        # lora_scheduler = torch.optim.lr_scheduler.LinearLR(optimizer=lora_optimizer, total_iters=max_iter)
 
     if args.finetune_all:
         optim_param_groups += [{"lr": 0.0001, "params": model.parameters()}]

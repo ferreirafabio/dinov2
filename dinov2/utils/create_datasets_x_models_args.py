@@ -7,6 +7,9 @@ import argparse
 
 from dinov2.data.datasets.meta_album import MetaAlbum, AVAILABLE_MTLBM_DATASETS, AVAILABLE_SETS, VERSIONS
 SPLITS = ["TRAIN", "VAL", "TEST"]
+VERSIONS = ["micro"]  # TODO: DELETE
+print("----only creating commands for micro----")
+
 DATASETS_CAUSING_MEM_ISSUE = [
     "extended_set2_TEX_ALOT",
     "extended_set2_RSD",
