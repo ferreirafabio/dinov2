@@ -132,20 +132,20 @@ if __name__ == '__main__':
 
     parser.add_argument(
         "--pretrained_weights_path",
-        default="dinov2/checkpoints/dinov2_vitl14_pretrain.pth",
+        default="dinov2/checkpoints/dinov2_vitg14_pretrain.pth",
         type=Path,
         help="Specifies which oretrained weights to use"
     )
 
     parser.add_argument(
         "--args_command_file_name",
-        default="vitl14_linear_meta_album_lora.args",
+        default="vitg14_linear_meta_album_lora.args",
         help="Specifies the name of the args file to be output"
     )
 
     parser.add_argument(
         "--config_file_path",
-        default="dinov2/configs/eval/vitl14_pretrain.yaml",
+        default="dinov2/configs/eval/vitg14_pretrain.yaml",
         type=Path,
         help="Specifies where the config file is located"
     )
@@ -159,7 +159,7 @@ if __name__ == '__main__':
 
     parser.add_argument(
         "--experiment_output_dir_path",
-        default="experiments/metaalbum/vitl14_lora",
+        default="experiments/metaalbum/vitg14_lora",
         type=Path,
         help="Specifies where the args file should be stored"
     )
@@ -182,7 +182,7 @@ if __name__ == '__main__':
     #/work/dlclarge2/ferreira-dinov2/dinov2/dinov2/configs/eval/dinov2_vitl14_pretrain.pth
     args = parser.parse_args()
     command_file_path = Path(args.command_file_path) / args.args_command_file_name
-    filtered_command_file_path = Path(args.command_file_path) / "vitl14_linear_meta_album_lora_filtered.args"
+    filtered_command_file_path = Path(args.command_file_path) / "vitg14_linear_meta_album_lora_filtered.args"
 
     commands, filtered_commands = generate_commands(
         dataset_dir_path=args.dataset_dir_path,

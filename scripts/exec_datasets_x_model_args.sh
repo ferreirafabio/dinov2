@@ -13,7 +13,7 @@
 source ~/.profile
 conda activate dinov2
 
-ARGS_FILE=experimentsvitl14_linear_meta_album_lora.args
+ARGS_FILE=experiments/vitl14_linear_meta_album_lora.args
 TASK_SPECIFIC_ARGS=$(sed "${SLURM_ARRAY_TASK_ID}q;d" $ARGS_FILE)
 
 echo $TASK_SPECIFIC_ARGS
